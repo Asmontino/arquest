@@ -35,17 +35,9 @@
     const ctx    = canvas.getContext('2d');
     const dbg    = document.getElementById('debug');
     let attempts = 0;
+    let scanStarted = false;
 
-    function log(msg) {
-      dbg.innerHTML = msg;
-    }
-
-    // Проверяем jsQR
-    if (typeof jsQR === 'undefined') {
-      log('❌ jsQR НЕ загружен!');
-    } else {
-      log('✅ jsQR загружен<br>Запускаємо камеру...');
-    }
+    function log(msg) { dbg.innerHTML = msg; }
 
     async function startCamera() {
       try {
@@ -54,23 +46,28 @@
         });
         video.srcObject = stream;
         await video.play();
-        log('✅ jsQR загружен<br>✅ Камера запущена<br>Очікуємо відео...');
-        video.addEventListener('loadeddata', () => {
-          log('✅ jsQR загружен<br>✅ Камера запущена<br>✅ Відео готове<br>Сканую...');
+        log('✅ jsQR загружен<br>✅ Камера запущена<br>⏳ Запускаємо сканування...');
+
+        // Запускаем сразу через таймер — не ждём loadeddata
+        setTimeout(() => {
+          log('✅ jsQR загружен<br>✅ Камера запущена<br>✅ Сканування активне<br>🔍 Шукаємо QR...');
           setInterval(tryDecode, 400);
-        }, { once: true });
+          scanStarted = true;
+        }, 1500);
+
       } catch(e) {
         log('❌ Помилка камери: ' + e.message);
       }
     }
 
     function tryDecode() {
-      if (video.readyState !== video.HAVE_ENOUGH_DATA) {
-        log('⏳ Відео ще не готове (readyState=' + video.readyState + ')');
+      // Если видео ещё не дало размер — пропускаем
+      if (video.videoWidth === 0) {
+        attempts++;
+        log('✅ Камера запущена<br>⏳ Відео ще не готове (спроба ' + attempts + ')');
         return;
       }
 
-      attempts++;
       canvas.width  = video.videoWidth;
       canvas.height = video.videoHeight;
       ctx.drawImage(video, 0, 0);
@@ -80,10 +77,12 @@
         inversionAttempts: 'attemptBoth'
       });
 
+      attempts++;
       if (code) {
         log('🎉 QR знайдено!<br>Текст: ' + code.data);
       } else {
-        log('✅ jsQR загружен<br>✅ Камера: ' + canvas.width + 'x' + canvas.height + '<br>🔍 Спроба #' + attempts + ' — QR не знайдено');
+        log('✅ Камера: ' + canvas.width + 'x' + canvas.height
+          + '<br>🔍 Спроба #' + attempts + ' — QR не знайдено<br>Наведи камеру на QR...');
       }
     }
 
