@@ -4,14 +4,23 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>ARQuest</title>
-  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
   <style>
     * { margin:0; padding:0; box-sizing:border-box; }
     body { background:#000; font-family:'Segoe UI',Arial,sans-serif; overflow:hidden; width:100vw; height:100vh; }
 
-    #video { position:fixed; inset:0; width:100%; height:100%; object-fit:cover; z-index:1; }
+    #video {
+      position:fixed; inset:0; width:100%; height:100%;
+      object-fit:cover; z-index:1;
+    }
+    #three-canvas {
+      position:fixed; inset:0; width:100%; height:100%;
+      z-index:2; pointer-events:none; display:none;
+    }
 
+    /* Екран сканування */
     #scan-overlay {
       position:fixed; inset:0; display:flex; flex-direction:column;
       align-items:center; justify-content:center; z-index:10; gap:24px;
@@ -35,17 +44,29 @@
     @keyframes scan { 0%{top:8px;opacity:1} 90%{top:calc(100% - 10px);opacity:1} 100%{top:calc(100% - 10px);opacity:0} }
     .scan-hint {
       color:#fff; font-size:16px; text-align:center;
-      text-shadow:0 1px 4px rgba(0,0,0,0.8);
       background:rgba(0,0,0,0.5); padding:10px 20px; border-radius:24px;
     }
 
-    #ar-screen { display:none; position:fixed; inset:0; z-index:5; }
-    model-viewer { width:100%; height:100%; background-color:transparent; --poster-color:transparent; }
+    /* Завантаження */
+    #loading {
+      display:none; position:fixed; inset:0; z-index:30;
+      align-items:center; justify-content:center;
+      flex-direction:column; gap:16px; background:rgba(0,0,0,0.5);
+    }
+    #loading.show { display:flex; }
+    .spinner {
+      width:48px; height:48px; border:4px solid rgba(255,255,255,0.2);
+      border-top-color:#4ade80; border-radius:50%;
+      animation:spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .loading-text { color:#fff; font-size:16px; }
 
+    /* UI */
     #ar-ui {
-      display:none; position:fixed; inset:0; pointer-events:none;
-      z-index:30; flex-direction:column; align-items:center;
-      justify-content:flex-end; padding-bottom:60px;
+      display:none; position:fixed; inset:0; z-index:20;
+      pointer-events:none; flex-direction:column;
+      align-items:center; justify-content:flex-end; padding-bottom:60px;
     }
     #tap-hint {
       background:rgba(0,0,0,0.6); color:#fff; font-size:15px;
@@ -54,6 +75,7 @@
     }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
 
+    /* COLLECTED */
     #collected-msg {
       display:none; position:fixed; inset:0; z-index:50;
       align-items:center; justify-content:center; pointer-events:none;
@@ -81,25 +103,16 @@
 <body>
   <video id="video" autoplay muted playsinline></video>
   <canvas id="qr-canvas"></canvas>
+  <canvas id="three-canvas"></canvas>
 
   <div id="scan-overlay">
     <div class="scan-frame"><div class="scan-line"></div></div>
     <p class="scan-hint">Наведи камеру на QR-код</p>
   </div>
 
-  <div id="ar-screen">
-    <model-viewer
-      id="viewer"
-      src="character.glb"
-      alt="ARQuest character"
-      ar
-      ar-modes="webxr scene-viewer quick-look"
-      camera-controls
-      auto-rotate
-      shadow-intensity="1"
-      environment-image="neutral"
-      autoplay
-    ></model-viewer>
+  <div id="loading">
+    <div class="spinner"></div>
+    <p class="loading-text">Завантаження персонажа...</p>
   </div>
 
   <div id="ar-ui">
@@ -118,18 +131,33 @@
 
   <script>
     const scanOverlay  = document.getElementById('scan-overlay');
-    const arScreen     = document.getElementById('ar-screen');
     const arUi         = document.getElementById('ar-ui');
     const tapHint      = document.getElementById('tap-hint');
     const collectedMsg = document.getElementById('collected-msg');
     const resetBtn     = document.getElementById('reset-btn');
+    const loadingEl    = document.getElementById('loading');
     const video        = document.getElementById('video');
-    const canvas       = document.getElementById('qr-canvas');
-    const ctx          = canvas.getContext('2d');
-    const viewer       = document.getElementById('viewer');
+    const qrCanvas     = document.getElementById('qr-canvas');
+    const threeCanvas  = document.getElementById('three-canvas');
+    const qrCtx        = qrCanvas.getContext('2d');
 
-    let scanning = true, collected = false;
+    let scanning   = true;
+    let tracking   = false;   // true = персонаж spawned, стежимо за QR
+    let collected  = false;
 
+    // Three.js об'єкти
+    let renderer, scene, cam, clock;
+    let charModel, mixer, animations = [], currentAction;
+    let animFrame;
+
+    // Висота персонажа над маркером (h у формулі P_char = T_k · (0,h,0,1))
+    const H_OFFSET = 0.15;
+
+    // Остання відома позиція маркера на екрані (NDC)
+    let lastMarkerNDC = { x: 0, y: 0, size: 0 };
+    let markerVisible = false;
+
+    // ── Камера ──────────────────────────────────────
     async function startCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -137,76 +165,226 @@
         });
         video.srcObject = stream;
         await video.play();
-        // Фикс: не ждём loadeddata, запускаем через таймер
-        setTimeout(() => {
-          setInterval(tryDecode, 400);
-        }, 1500);
+        setTimeout(() => setInterval(processFrame, 100), 1500);
       } catch(e) {
         alert('Немає доступу до камери. Відкрий у Chrome і дозволь камеру.');
       }
     }
 
-    function tryDecode() {
-      if (!scanning || video.videoWidth === 0) return;
-      canvas.width  = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx.drawImage(video, 0, 0);
-      const img  = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    // ── Головний цикл: сканування + відстеження ─────
+    function processFrame() {
+      if (video.videoWidth === 0) return;
+
+      qrCanvas.width  = video.videoWidth;
+      qrCanvas.height = video.videoHeight;
+      qrCtx.drawImage(video, 0, 0);
+
+      const img  = qrCtx.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
       const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'attemptBoth' });
+
       if (code) {
-        scanning = false;
-        showCharacter();
+        const loc = code.location;
+
+        // Центр QR у пікселях відеокадру
+        const cx = (loc.topLeftCorner.x + loc.bottomRightCorner.x) / 2;
+        const cy = (loc.topLeftCorner.y + loc.bottomRightCorner.y) / 2;
+        // Розмір QR (для оцінки відстані)
+        const sz = Math.abs(loc.bottomRightCorner.x - loc.topLeftCorner.x);
+
+        // Перетворюємо у NDC [-1, 1]
+        lastMarkerNDC.x    =  (cx / qrCanvas.width)  * 2 - 1;
+        lastMarkerNDC.y    = -(cy / qrCanvas.height) * 2 + 1;
+        lastMarkerNDC.size =   sz / qrCanvas.width;
+        markerVisible      = true;
+
+        if (scanning) {
+          // Перше сканування — спавнимо персонажа
+          scanning = false;
+          scanOverlay.style.display = 'none';
+          loadingEl.classList.add('show');
+          initAR();
+        }
+      } else {
+        markerVisible = false;
       }
     }
 
-    function showCharacter() {
-      video.srcObject.getTracks().forEach(t => t.stop());
-      scanOverlay.style.display = 'none';
-      arScreen.style.display    = 'block';
-      arUi.style.display        = 'flex';
-      resetBtn.style.display    = 'block';
+    // ── Ініціалізація Three.js ───────────────────────
+    function initAR() {
+      renderer = new THREE.WebGLRenderer({ canvas: threeCanvas, alpha: true, antialias: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setClearColor(0x000000, 0);
+      renderer.outputEncoding = THREE.sRGBEncoding;
+      threeCanvas.style.display = 'block';
 
-      viewer.addEventListener('load', () => {
-        const anims = viewer.availableAnimations;
-        if (anims && anims.length > 0) {
-          viewer.animationName = anims[0];
-          viewer.play({ repetitions: Infinity });
+      scene = new THREE.Scene();
+
+      // Ортографічна проекція для точного відображення поверх відео
+      cam = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 100);
+      cam.position.set(0, 0, 5);
+
+      // Освітлення
+      scene.add(new THREE.AmbientLight(0xffffff, 1.4));
+      const dir = new THREE.DirectionalLight(0xffffff, 1.5);
+      dir.position.set(2, 4, 3);
+      scene.add(dir);
+
+      clock = new THREE.Clock();
+
+      // Завантаження моделі
+      const loader = new THREE.GLTFLoader();
+      loader.load('character.glb',
+        (gltf) => {
+          loadingEl.classList.remove('show');
+          charModel = gltf.scene;
+
+          // Автомасштаб
+          const box  = new THREE.Box3().setFromObject(charModel);
+          const size = box.getSize(new THREE.Vector3());
+          const s    = 1.2 / Math.max(size.x, size.y, size.z);
+          charModel.scale.setScalar(s);
+
+          // Виправити основу на Y=0
+          const box2 = new THREE.Box3().setFromObject(charModel);
+          charModel.position.y = -box2.min.y;
+
+          scene.add(charModel);
+
+          // Анімація
+          animations = gltf.animations;
+          if (animations.length > 0) {
+            mixer = new THREE.AnimationMixer(charModel);
+            playAnim(0, true);
+          }
+
+          // Анімація появи (scale 0 → 1)
+          charModel.scale.setScalar(0);
+          spawnEffect(charModel, s);
+
+          tracking = true;
+          arUi.style.display    = 'flex';
+          resetBtn.style.display = 'block';
+          renderLoop();
+        },
+        (p) => {
+          if (p.total)
+            document.querySelector('.loading-text').textContent =
+              'Завантаження... ' + Math.round(p.loaded / p.total * 100) + '%';
+        },
+        (err) => {
+          loadingEl.classList.remove('show');
+          alert('Помилка завантаження: ' + err.message);
         }
-      }, { once: true });
+      );
+
+      window.addEventListener('resize', () => {
+        cam.aspect = window.innerWidth / window.innerHeight;
+        cam.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
     }
 
+    // ── Анімація появи ───────────────────────────────
+    function spawnEffect(model, targetScale) {
+      const start = performance.now();
+      const dur   = 500;
+      function step(now) {
+        const t    = Math.min((now - start) / dur, 1);
+        const ease = 1 - Math.pow(1 - t, 3);
+        model.scale.setScalar(targetScale * ease);
+        if (t < 1) requestAnimationFrame(step);
+      }
+      requestAnimationFrame(step);
+    }
+
+    // ── Render loop: позиціонування за маркером ──────
+    function renderLoop() {
+      animFrame = requestAnimationFrame(renderLoop);
+      const delta = clock.getDelta();
+      if (mixer) mixer.update(delta);
+
+      if (charModel && tracking) {
+        // P_char = T_k · (0, h, 0, 1)ᵀ
+        // Перетворюємо NDC позицію маркера у 3D координати сцени
+        // Відстань оцінюємо за розміром QR: більший QR = ближче
+        const dist = Math.max(0.5, Math.min(4.0, 0.15 / (lastMarkerNDC.size + 0.001)));
+
+        // Вектор у world space через unproject
+        const targetVec = new THREE.Vector3(lastMarkerNDC.x, lastMarkerNDC.y, 0.5);
+        targetVec.unproject(cam);
+        targetVec.sub(cam.position).normalize();
+        targetVec.multiplyScalar(dist);
+        targetVec.add(cam.position);
+
+        // Застосовуємо формулу: P_char.y += H_OFFSET (h)
+        targetVec.y += H_OFFSET;
+
+        if (markerVisible) {
+          // Маркер видимий — плавно рухаємось до нього
+          charModel.position.lerp(targetVec, 0.15);
+        }
+        // Якщо маркер не видимий — залишаємось на останній позиції
+
+        // Персонаж завжди дивиться на камеру (по горизонталі)
+        const lookTarget = new THREE.Vector3(cam.position.x, charModel.position.y, cam.position.z);
+        charModel.lookAt(lookTarget);
+      }
+
+      renderer.render(scene, cam);
+    }
+
+    // ── Анімації ─────────────────────────────────────
+    function playAnim(index, loop) {
+      if (!mixer || !animations[index]) return;
+      if (currentAction) currentAction.fadeOut(0.3);
+      const action = mixer.clipAction(animations[index]);
+      action.reset();
+      action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+      action.clampWhenFinished = !loop;
+      action.fadeIn(0.3).play();
+      currentAction = action;
+    }
+
+    // ── Тап ──────────────────────────────────────────
     document.addEventListener('click', handleTap);
     document.addEventListener('touchstart', handleTap, { passive: true });
 
     function handleTap(e) {
       if (e.target === resetBtn) return;
-      if (arScreen.style.display !== 'block') return;
+      if (!tracking) return;
       if (collected) return;
       collected = true;
 
-      const anims = viewer.availableAnimations;
-      if (anims && anims.length > 1) {
-        viewer.animationName = anims[1];
-        viewer.play({ repetitions: 1 });
-        viewer.addEventListener('finished', () => {
-          viewer.animationName = anims[0];
-          viewer.play({ repetitions: Infinity });
-        }, { once: true });
-      }
+      const idx = animations.length > 1 ? 1 : 0;
+      playAnim(idx, false);
 
       tapHint.style.display = 'none';
       collectedMsg.classList.add('show');
       setTimeout(() => collectedMsg.classList.remove('show'), 3000);
+
+      if (animations.length > 1 && mixer) {
+        mixer.addEventListener('finished', () => playAnim(0, true), { once: true });
+      }
     }
 
+    // ── Скидання ─────────────────────────────────────
     function resetApp() {
-      collected = false; scanning = true;
-      scanOverlay.style.display = 'flex';
-      arScreen.style.display    = 'none';
+      collected = false; scanning = true; tracking = false; markerVisible = false;
+
+      if (animFrame)  cancelAnimationFrame(animFrame);
+      if (renderer)   { renderer.dispose(); renderer = null; }
+      if (mixer)      { mixer.stopAllAction(); mixer = null; }
+      scene = null; cam = null; charModel = null; animations = []; currentAction = null;
+
+      threeCanvas.style.display = 'none';
       arUi.style.display        = 'none';
       resetBtn.style.display    = 'none';
       tapHint.style.display     = 'block';
       collectedMsg.classList.remove('show');
+      loadingEl.classList.remove('show');
+      scanOverlay.style.display = 'flex';
+
       startCamera();
     }
 
