@@ -4,248 +4,164 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>ARQuest</title>
-
-  <!-- model-viewer для 3D моделей в браузере -->
-  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
-  <!-- jsQR для сканирования QR -->
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
-
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-
-    body {
-      background: #000;
-      font-family: 'Segoe UI', Arial, sans-serif;
-      overflow: hidden;
-      width: 100vw;
-      height: 100vh;
-    }
-
-    /* ─── Экран сканирования ─── */
-    #scan-screen {
-      position: fixed;
-      inset: 0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      z-index: 10;
-    }
+    body { background: #000; font-family: 'Segoe UI', Arial, sans-serif; overflow: hidden; width: 100vw; height: 100vh; }
 
     #video {
-      position: fixed;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
+      position: fixed; inset: 0;
+      width: 100%; height: 100%;
+      object-fit: cover; z-index: 1;
+    }
+    #three-canvas {
+      position: fixed; inset: 0;
+      width: 100%; height: 100%;
+      z-index: 2; pointer-events: none; display: none;
     }
 
+    /* ── Рамка сканирования ── */
     #scan-overlay {
-      position: relative;
-      z-index: 20;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 24px;
+      position: fixed; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      z-index: 10; gap: 24px;
     }
-
     .scan-frame {
-      width: 220px;
-      height: 220px;
+      width: 220px; height: 220px;
       border: 3px solid rgba(255,255,255,0.9);
       border-radius: 16px;
       box-shadow: 0 0 0 9999px rgba(0,0,0,0.45);
       position: relative;
     }
-
-    .scan-frame::before,
-    .scan-frame::after {
-      content: '';
-      position: absolute;
-      width: 32px;
-      height: 32px;
-      border-color: #4ade80;
-      border-style: solid;
+    .scan-frame::before, .scan-frame::after {
+      content: ''; position: absolute;
+      width: 32px; height: 32px;
+      border-color: #4ade80; border-style: solid;
     }
-    .scan-frame::before { top: -3px; left: -3px; border-width: 4px 0 0 4px; border-radius: 12px 0 0 0; }
-    .scan-frame::after  { bottom: -3px; right: -3px; border-width: 0 4px 4px 0; border-radius: 0 0 12px 0; }
-
+    .scan-frame::before { top:-3px; left:-3px; border-width:4px 0 0 4px; border-radius:12px 0 0 0; }
+    .scan-frame::after  { bottom:-3px; right:-3px; border-width:0 4px 4px 0; border-radius:0 0 12px 0; }
     .scan-line {
-      position: absolute;
-      left: 8px; right: 8px;
-      height: 2px;
+      position: absolute; left:8px; right:8px; height:2px;
       background: linear-gradient(to right, transparent, #4ade80, transparent);
-      animation: scan 2s ease-in-out infinite;
-      top: 0;
+      animation: scanline 2s ease-in-out infinite;
     }
-    @keyframes scan {
-      0%   { top: 8px; opacity: 1; }
-      90%  { top: calc(100% - 10px); opacity: 1; }
-      100% { top: calc(100% - 10px); opacity: 0; }
+    @keyframes scanline {
+      0%   { top:8px; opacity:1; }
+      90%  { top:calc(100% - 10px); opacity:1; }
+      100% { top:calc(100% - 10px); opacity:0; }
     }
-
     .scan-hint {
-      color: #fff;
-      font-size: 16px;
-      text-align: center;
-      text-shadow: 0 1px 4px rgba(0,0,0,0.8);
-      background: rgba(0,0,0,0.5);
-      padding: 10px 20px;
-      border-radius: 24px;
+      color:#fff; font-size:16px; text-align:center;
+      background:rgba(0,0,0,0.5); padding:10px 20px; border-radius:24px;
     }
 
-    /* ─── Экран AR ─── */
-    #ar-screen {
+    /* ── Загрузка ── */
+    #loading {
+      display:none; position:fixed; inset:0; z-index:30;
+      align-items:center; justify-content:center;
+      flex-direction:column; gap:16px; background:rgba(0,0,0,0.4);
+    }
+    #loading.show { display:flex; }
+    .spinner {
+      width:48px; height:48px;
+      border:4px solid rgba(255,255,255,0.2);
+      border-top-color:#4ade80; border-radius:50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .loading-text { color:#fff; font-size:16px; }
+
+    /* ── Нижняя панель кнопок ── */
+    #bottom-ui {
       display: none;
-      position: fixed;
-      inset: 0;
-      z-index: 5;
+      position: fixed; bottom: 40px; left: 0; right: 0;
+      z-index: 20;
+      flex-direction: column; align-items: center; gap: 14px;
     }
-
-    model-viewer {
-      width: 100%;
-      height: 100%;
-      background-color: transparent;
-      --poster-color: transparent;
-    }
-
-    /* ─── UI поверх AR ─── */
-    #ar-ui {
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      z-index: 30;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: flex-end;
-      padding-bottom: 60px;
-    }
-
     #tap-hint {
-      background: rgba(0,0,0,0.6);
-      color: #fff;
-      font-size: 15px;
-      padding: 10px 24px;
-      border-radius: 24px;
+      background:rgba(0,0,0,0.6); color:#fff;
+      font-size:15px; padding:10px 24px; border-radius:24px;
       animation: pulse 1.8s ease-in-out infinite;
     }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.5; }
-    }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
 
-    /* ─── COLLECTED ─── */
+    #place-btn {
+      background: rgba(74,222,128,0.85);
+      color: #000; font-size:15px; font-weight:600;
+      border: none; border-radius:28px;
+      padding: 12px 28px; cursor: pointer;
+      box-shadow: 0 0 20px rgba(74,222,128,0.5);
+    }
+    #place-btn:active { transform: scale(0.96); }
+
+    /* ── COLLECTED ── */
     #collected-msg {
-      display: none;
-      position: fixed;
-      inset: 0;
-      z-index: 50;
-      align-items: center;
-      justify-content: center;
-      pointer-events: none;
+      display:none; position:fixed; inset:0;
+      z-index:50; align-items:center; justify-content:center;
+      pointer-events:none;
     }
-    #collected-msg.show {
-      display: flex;
-    }
-
+    #collected-msg.show { display:flex; }
     .collected-inner {
-      text-align: center;
-      animation: popIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+      text-align:center;
+      animation: popIn 0.4s cubic-bezier(0.175,0.885,0.32,1.275) forwards;
     }
-    @keyframes popIn {
-      0%   { transform: scale(0.5); opacity: 0; }
-      100% { transform: scale(1);   opacity: 1; }
-    }
-
-    .collected-icon {
-      font-size: 72px;
-      line-height: 1;
-      filter: drop-shadow(0 0 20px rgba(74,222,128,0.8));
-    }
-
+    @keyframes popIn { 0%{transform:scale(0.5);opacity:0} 100%{transform:scale(1);opacity:1} }
+    .collected-icon { font-size:72px; line-height:1; }
     .collected-text {
-      display: block;
-      font-size: 42px;
-      font-weight: 800;
-      color: #fff;
-      text-shadow:
-        0 0 20px rgba(74,222,128,0.9),
-        0 2px 8px rgba(0,0,0,0.6);
-      letter-spacing: 4px;
-      margin-top: 8px;
+      display:block; font-size:42px; font-weight:800; color:#fff;
+      text-shadow:0 0 20px rgba(74,222,128,0.9), 0 2px 8px rgba(0,0,0,0.6);
+      letter-spacing:4px; margin-top:8px;
     }
+    .collected-sub { display:block; font-size:16px; color:rgba(255,255,255,0.8); margin-top:8px; }
 
-    .collected-sub {
-      display: block;
-      font-size: 16px;
-      color: rgba(255,255,255,0.8);
-      margin-top: 8px;
-    }
-
-    /* ─── Кнопка "Ещё раз" ─── */
+    /* ── Кнопка сброса ── */
     #reset-btn {
+      display:none; position:fixed; top:24px; right:20px; z-index:40;
+      background:rgba(0,0,0,0.6); color:#fff;
+      border:1.5px solid rgba(255,255,255,0.4);
+      border-radius:24px; padding:8px 18px; font-size:14px; cursor:pointer;
+    }
+
+    /* ── QR-маркер (зелёная рамка вокруг найденного QR) ── */
+    #qr-marker {
       display: none;
       position: fixed;
-      top: 24px;
-      right: 20px;
-      z-index: 40;
-      background: rgba(0,0,0,0.6);
-      color: #fff;
-      border: 1.5px solid rgba(255,255,255,0.4);
-      border-radius: 24px;
-      padding: 8px 18px;
-      font-size: 14px;
-      cursor: pointer;
+      border: 3px solid #4ade80;
+      border-radius: 8px;
+      box-shadow: 0 0 0 3px rgba(74,222,128,0.3);
+      z-index: 15;
+      pointer-events: none;
+      transition: all 0.1s;
     }
 
-    /* ─── Скрытый canvas для QR ─── */
-    #qr-canvas { display: none; }
+    #qr-canvas { display:none; }
   </style>
 </head>
 <body>
 
-  <!-- ══════════ ЭКРАН СКАНИРОВАНИЯ ══════════ -->
-  <div id="scan-screen">
-    <video id="video" autoplay muted playsinline></video>
-    <canvas id="qr-canvas"></canvas>
+  <video id="video" autoplay muted playsinline></video>
+  <canvas id="qr-canvas"></canvas>
+  <canvas id="three-canvas"></canvas>
+  <div id="qr-marker"></div>
 
-    <div id="scan-overlay">
-      <div class="scan-frame">
-        <div class="scan-line"></div>
-      </div>
-      <p class="scan-hint">Наведи камеру на QR-код</p>
-    </div>
+  <div id="scan-overlay">
+    <div class="scan-frame"><div class="scan-line"></div></div>
+    <p class="scan-hint">Наведи камеру на QR-код</p>
   </div>
 
-  <!-- ══════════ ЭКРАН AR ══════════ -->
-  <div id="ar-screen">
-    <!--
-      ⬇️  ЗАМЕНИ "character.glb" НА ИМЯ СВОЕГО ФАЙЛА
-      Если в модели есть анимация — она запустится автоматически
-    -->
-    <model-viewer
-      id="viewer"
-      src="character.glb"
-      alt="ARQuest character"
-      ar
-      ar-modes="webxr scene-viewer quick-look"
-      camera-controls
-      auto-rotate
-      shadow-intensity="1"
-      environment-image="neutral"
-      exposure="1"
-      animation-name="Idle"
-      autoplay
-    ></model-viewer>
+  <div id="loading">
+    <div class="spinner"></div>
+    <p class="loading-text">Завантаження персонажа...</p>
   </div>
 
-  <!-- ══════════ UI ПОВЕРХ AR ══════════ -->
-  <div id="ar-ui">
-    <div id="tap-hint">Торкнись екрану</div>
+  <div id="bottom-ui">
+    <div id="tap-hint">Торкнись персонажа</div>
+    <button id="place-btn" onclick="placeOnFloor()">📍 Поставити на підлогу</button>
   </div>
 
-  <!-- ══════════ COLLECTED ══════════ -->
   <div id="collected-msg">
     <div class="collected-inner">
       <span class="collected-icon">✦</span>
@@ -254,142 +170,277 @@
     </div>
   </div>
 
-  <!-- ══════════ КНОПКА СБРОСА ══════════ -->
   <button id="reset-btn" onclick="resetApp()">↩ Знову</button>
 
-
   <script>
-    const scanScreen   = document.getElementById('scan-screen');
-    const arScreen     = document.getElementById('ar-screen');
-    const arUi         = document.getElementById('ar-ui');
+    const scanOverlay  = document.getElementById('scan-overlay');
+    const bottomUi     = document.getElementById('bottom-ui');
     const tapHint      = document.getElementById('tap-hint');
+    const placeBtn     = document.getElementById('place-btn');
     const collectedMsg = document.getElementById('collected-msg');
     const resetBtn     = document.getElementById('reset-btn');
+    const loadingEl    = document.getElementById('loading');
+    const qrMarker     = document.getElementById('qr-marker');
     const video        = document.getElementById('video');
-    const canvas       = document.getElementById('qr-canvas');
-    const ctx          = canvas.getContext('2d');
-    const viewer       = document.getElementById('viewer');
+    const qrCanvas     = document.getElementById('qr-canvas');
+    const threeCanvas  = document.getElementById('three-canvas');
+    const qrCtx        = qrCanvas.getContext('2d');
 
-    let scanning       = true;
-    let collected      = false;
-    let scanTimer      = null;
+    let scanning = true, collected = false, scanTimer = null;
+    let mixer = null, clock = null, renderer = null, scene = null, cam = null;
+    let animations = [], currentAction = null, animFrame = null;
+    let charModel = null;
 
-    // ─── Запуск камеры ───────────────────────────────
+    // Позиция QR в пространстве Three.js
+    let qrWorldPos = new THREE.Vector3(0, 0, -2);
+    // Режим: 'qr' — над QR, 'floor' — на плоскости
+    let placementMode = 'qr';
+
+    // ── Камера ──────────────────────────────────────
     async function startCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' }
+          video: { facingMode: 'environment', width:{ideal:1280}, height:{ideal:720} }
         });
         video.srcObject = stream;
-        video.play();
-        video.addEventListener('loadeddata', startScanning);
-      } catch (e) {
+        await video.play();
+        video.addEventListener('loadeddata', startScanning, { once: true });
+      } catch(e) {
         alert('Немає доступу до камери. Відкрий у Chrome і дозволь камеру.');
       }
     }
 
-    // ─── QR сканирование ─────────────────────────────
+    // ── QR сканирование ─────────────────────────────
     function startScanning() {
-      scanTimer = setInterval(tryDecode, 400);
+      scanTimer = setInterval(tryDecode, 300);
     }
 
     function tryDecode() {
-      if (!scanning) return;
-      if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
+      if (!scanning || video.readyState !== video.HAVE_ENOUGH_DATA) return;
+      qrCanvas.width  = video.videoWidth;
+      qrCanvas.height = video.videoHeight;
+      qrCtx.drawImage(video, 0, 0);
 
-      canvas.width  = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx.drawImage(video, 0, 0);
-
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const code = jsQR(imageData.data, imageData.width, imageData.height, {
-        inversionAttempts: 'dontInvert'
-      });
+      const img  = qrCtx.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
+      const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
 
       if (code) {
         scanning = false;
         clearInterval(scanTimer);
-        console.log('QR знайдено:', code.data);
-        showCharacter();
+
+        // Получить позицию QR на экране
+        const loc = code.location;
+        const qrScreenX = (loc.topLeftCorner.x + loc.bottomRightCorner.x) / 2 / qrCanvas.width  * window.innerWidth;
+        const qrScreenY = (loc.topLeftCorner.y + loc.bottomRightCorner.y) / 2 / qrCanvas.height * window.innerHeight;
+        const qrW = Math.abs(loc.bottomRightCorner.x - loc.topLeftCorner.x) / qrCanvas.width  * window.innerWidth;
+        const qrH = Math.abs(loc.bottomRightCorner.y - loc.topLeftCorner.y) / qrCanvas.height * window.innerHeight;
+
+        // Показать зелёную рамку вокруг QR
+        qrMarker.style.display = 'block';
+        qrMarker.style.left    = (qrScreenX - qrW/2 - 8) + 'px';
+        qrMarker.style.top     = (qrScreenY - qrH/2 - 8) + 'px';
+        qrMarker.style.width   = (qrW + 16) + 'px';
+        qrMarker.style.height  = (qrH + 16) + 'px';
+
+        // Сконвертировать экранные координаты в 3D (NDC)
+        // Персонаж будет над QR-кодом
+        const ndcX =  (qrScreenX / window.innerWidth)  * 2 - 1;
+        const ndcY = -(qrScreenY / window.innerHeight) * 2 + 1;
+        qrWorldPos = new THREE.Vector3(ndcX * 2.5, 0, -2.5 + ndcY * 1.5);
+
+        // Скрыть рамку сканирования
+        scanOverlay.style.display = 'none';
+        loadingEl.classList.add('show');
+
+        // Через 0.4с скрыть маркер QR и запустить AR
+        setTimeout(() => {
+          initAR(qrWorldPos);
+        }, 400);
       }
     }
 
-    // ─── Показать персонажа ───────────────────────────
-    function showCharacter() {
-      // Стоп-кадр камеры
-      video.srcObject.getTracks().forEach(t => t.stop());
+    // ── Инициализация Three.js AR ───────────────────
+    function initAR(spawnPos) {
+      renderer = new THREE.WebGLRenderer({ canvas: threeCanvas, alpha: true, antialias: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setClearColor(0x000000, 0);
+      renderer.outputEncoding = THREE.sRGBEncoding;
+      threeCanvas.style.display = 'block';
 
-      scanScreen.style.display = 'none';
-      arScreen.style.display   = 'block';
-      arUi.style.display       = 'flex';
-      resetBtn.style.display   = 'block';
+      scene = new THREE.Scene();
 
-      // Включить анимацию персонажа
-      viewer.addEventListener('load', () => {
-        const anims = viewer.availableAnimations;
-        console.log('Анімації:', anims);
-        if (anims && anims.length > 0) {
-          viewer.animationName = anims[0]; // первая анимация (Idle)
-          viewer.play({ repetitions: Infinity });
+      // FOV под мобильный
+      cam = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 100);
+      cam.position.set(0, 1.2, 3);
+      cam.lookAt(0, 0.5, 0);
+
+      // Освещение
+      scene.add(new THREE.AmbientLight(0xffffff, 1.4));
+      const dir = new THREE.DirectionalLight(0xffffff, 1.5);
+      dir.position.set(2, 4, 3);
+      scene.add(dir);
+
+      clock = new THREE.Clock();
+
+      // Загрузка модели
+      const loader = new THREE.GLTFLoader();
+      loader.load('character.glb',
+        (gltf) => {
+          loadingEl.classList.remove('show');
+          qrMarker.style.display = 'none';
+
+          charModel = gltf.scene;
+
+          // Автомасштаб
+          const box = new THREE.Box3().setFromObject(charModel);
+          const size = box.getSize(new THREE.Vector3());
+          const scale = 1.6 / Math.max(size.x, size.y, size.z);
+          charModel.scale.setScalar(scale);
+
+          // Поставить основание на Y=0
+          const box2 = new THREE.Box3().setFromObject(charModel);
+          charModel.position.copy(spawnPos);
+          charModel.position.y = spawnPos.y - box2.min.y * scale;
+          charModel.rotation.y = Math.PI;
+
+          scene.add(charModel);
+
+          // Анимации
+          animations = gltf.animations;
+          if (animations.length > 0) {
+            mixer = new THREE.AnimationMixer(charModel);
+            playAnim(0, true);
+          }
+
+          // Появление с анимацией scale
+          charModel.scale.setScalar(0);
+          animateSpawn(charModel, scale);
+
+          bottomUi.style.display   = 'flex';
+          resetBtn.style.display   = 'block';
+          animate();
+        },
+        (p) => {
+          if (p.total) document.querySelector('.loading-text').textContent =
+            'Завантаження... ' + Math.round(p.loaded / p.total * 100) + '%';
+        },
+        (err) => {
+          loadingEl.classList.remove('show');
+          alert('Помилка завантаження моделі: ' + err.message);
         }
-      }, { once: true });
+      );
+
+      window.addEventListener('resize', () => {
+        cam.aspect = window.innerWidth / window.innerHeight;
+        cam.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
     }
 
-    // ─── Тап / клик по экрану ────────────────────────
+    // ── Анимация появления (scale 0 → target) ───────
+    function animateSpawn(model, targetScale) {
+      let progress = 0;
+      const duration = 500; // ms
+      const start = performance.now();
+      function step(now) {
+        progress = Math.min((now - start) / duration, 1);
+        // Easing: cubic out
+        const ease = 1 - Math.pow(1 - progress, 3);
+        model.scale.setScalar(targetScale * ease);
+        if (progress < 1) requestAnimationFrame(step);
+      }
+      requestAnimationFrame(step);
+    }
+
+    // ── Переместить на "пол" (центр экрана, ближе) ──
+    function placeOnFloor() {
+      if (!charModel) return;
+      placementMode = 'floor';
+
+      // Плавное перемещение на плоскость перед камерой
+      const targetPos = new THREE.Vector3(0, 0, -1);
+
+      const startPos = charModel.position.clone();
+      const duration = 600;
+      const start = performance.now();
+
+      function step(now) {
+        const t = Math.min((now - start) / duration, 1);
+        const ease = 1 - Math.pow(1 - t, 3);
+        charModel.position.lerpVectors(startPos, targetPos, ease);
+        if (t < 1) requestAnimationFrame(step);
+      }
+      requestAnimationFrame(step);
+
+      placeBtn.style.display = 'none';
+      tapHint.textContent = 'Торкнись персонажа';
+    }
+
+    // ── Анимации ─────────────────────────────────────
+    function playAnim(index, loop) {
+      if (!mixer || !animations[index]) return;
+      if (currentAction) currentAction.fadeOut(0.3);
+      const action = mixer.clipAction(animations[index]);
+      action.reset();
+      action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+      action.clampWhenFinished = !loop;
+      action.fadeIn(0.3).play();
+      currentAction = action;
+      return action;
+    }
+
+    // ── Рендер-лупп ─────────────────────────────────
+    function animate() {
+      animFrame = requestAnimationFrame(animate);
+      if (mixer) mixer.update(clock.getDelta());
+      renderer.render(scene, cam);
+    }
+
+    // ── Тап по экрану ────────────────────────────────
     document.addEventListener('click', handleTap);
     document.addEventListener('touchstart', handleTap, { passive: true });
 
     function handleTap(e) {
-      // Игнорируем клик по кнопке сброса
-      if (e.target === resetBtn) return;
-      // Только на экране AR
-      if (arScreen.style.display !== 'block') return;
-      // Только если ещё не собран
+      if (e.target === resetBtn || e.target === placeBtn) return;
+      if (bottomUi.style.display !== 'flex') return;
       if (collected) return;
-
       collected = true;
-      playCollectAnimation();
-    }
 
-    function playCollectAnimation() {
-      // Сменить анимацию на вторую (если есть)
-      const anims = viewer.availableAnimations;
-      if (anims && anims.length > 1) {
-        viewer.animationName = anims[1]; // Wave / Dance / Attack
-        viewer.play({ repetitions: 1 });
-        // Вернуть Idle после окончания
-        viewer.addEventListener('finished', () => {
-          viewer.animationName = anims[0];
-          viewer.play({ repetitions: Infinity });
-        }, { once: true });
-      }
+      const idx = animations.length > 1 ? 1 : 0;
+      playAnim(idx, false);
 
-      // Показать COLLECTED
       tapHint.style.display = 'none';
+      placeBtn.style.display = 'none';
       collectedMsg.classList.add('show');
+      setTimeout(() => collectedMsg.classList.remove('show'), 3000);
 
-      // Скрыть через 3 секунды
-      setTimeout(() => {
-        collectedMsg.classList.remove('show');
-      }, 3000);
+      if (animations.length > 1 && mixer) {
+        mixer.addEventListener('finished', () => playAnim(0, true), { once: true });
+      }
     }
 
-    // ─── Сброс ───────────────────────────────────────
+    // ── Сброс ────────────────────────────────────────
     function resetApp() {
-      collected  = false;
-      scanning   = true;
+      collected = false; scanning = true; placementMode = 'qr';
+      if (animFrame) cancelAnimationFrame(animFrame);
+      if (renderer)  { renderer.dispose(); renderer = null; }
+      if (mixer)     { mixer.stopAllAction(); mixer = null; }
+      scene = null; cam = null; charModel = null;
+      animations = []; currentAction = null; animFrame = null;
 
-      scanScreen.style.display   = 'flex';
-      arScreen.style.display     = 'none';
-      arUi.style.display         = 'none';
-      resetBtn.style.display     = 'none';
-      tapHint.style.display      = 'block';
+      threeCanvas.style.display = 'none';
+      bottomUi.style.display    = 'none';
+      resetBtn.style.display    = 'none';
+      qrMarker.style.display    = 'none';
+      tapHint.style.display     = 'block';
+      placeBtn.style.display    = 'block';
       collectedMsg.classList.remove('show');
-
+      loadingEl.classList.remove('show');
+      scanOverlay.style.display = 'flex';
       startCamera();
     }
 
-    // ─── Старт ───────────────────────────────────────
     startCamera();
   </script>
 </body>
