@@ -3,22 +3,77 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>ARQuest Debug</title>
+  <title>ARQuest</title>
+  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
   <style>
     * { margin:0; padding:0; box-sizing:border-box; }
-    body { background:#000; font-family: monospace; overflow:hidden; width:100vw; height:100vh; }
+    body { background:#000; font-family:'Segoe UI',Arial,sans-serif; overflow:hidden; width:100vw; height:100vh; }
+
     #video { position:fixed; inset:0; width:100%; height:100%; object-fit:cover; z-index:1; }
-    #debug {
-      position:fixed; top:0; left:0; right:0;
-      z-index:100; background:rgba(0,0,0,0.75);
-      color:#4ade80; font-size:13px;
-      padding:10px 12px; line-height:1.6;
+
+    #scan-overlay {
+      position:fixed; inset:0; display:flex; flex-direction:column;
+      align-items:center; justify-content:center; z-index:10; gap:24px;
     }
-    #scan-hint {
-      position:fixed; bottom:40px; left:0; right:0;
-      text-align:center; color:#fff; font-size:16px;
-      background:rgba(0,0,0,0.5); padding:10px; z-index:100;
+    .scan-frame {
+      width:220px; height:220px;
+      border:3px solid rgba(255,255,255,0.9); border-radius:16px;
+      box-shadow:0 0 0 9999px rgba(0,0,0,0.45); position:relative;
+    }
+    .scan-frame::before, .scan-frame::after {
+      content:''; position:absolute; width:32px; height:32px;
+      border-color:#4ade80; border-style:solid;
+    }
+    .scan-frame::before { top:-3px; left:-3px; border-width:4px 0 0 4px; border-radius:12px 0 0 0; }
+    .scan-frame::after  { bottom:-3px; right:-3px; border-width:0 4px 4px 0; border-radius:0 0 12px 0; }
+    .scan-line {
+      position:absolute; left:8px; right:8px; height:2px;
+      background:linear-gradient(to right, transparent, #4ade80, transparent);
+      animation:scan 2s ease-in-out infinite; top:0;
+    }
+    @keyframes scan { 0%{top:8px;opacity:1} 90%{top:calc(100% - 10px);opacity:1} 100%{top:calc(100% - 10px);opacity:0} }
+    .scan-hint {
+      color:#fff; font-size:16px; text-align:center;
+      text-shadow:0 1px 4px rgba(0,0,0,0.8);
+      background:rgba(0,0,0,0.5); padding:10px 20px; border-radius:24px;
+    }
+
+    #ar-screen { display:none; position:fixed; inset:0; z-index:5; }
+    model-viewer { width:100%; height:100%; background-color:transparent; --poster-color:transparent; }
+
+    #ar-ui {
+      display:none; position:fixed; inset:0; pointer-events:none;
+      z-index:30; flex-direction:column; align-items:center;
+      justify-content:flex-end; padding-bottom:60px;
+    }
+    #tap-hint {
+      background:rgba(0,0,0,0.6); color:#fff; font-size:15px;
+      padding:10px 24px; border-radius:24px;
+      animation:pulse 1.8s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+
+    #collected-msg {
+      display:none; position:fixed; inset:0; z-index:50;
+      align-items:center; justify-content:center; pointer-events:none;
+    }
+    #collected-msg.show { display:flex; }
+    .collected-inner { text-align:center; animation:popIn 0.4s cubic-bezier(0.175,0.885,0.32,1.275) forwards; }
+    @keyframes popIn { 0%{transform:scale(0.5);opacity:0} 100%{transform:scale(1);opacity:1} }
+    .collected-icon { font-size:72px; line-height:1; }
+    .collected-text {
+      display:block; font-size:42px; font-weight:800; color:#fff;
+      text-shadow:0 0 20px rgba(74,222,128,0.9), 0 2px 8px rgba(0,0,0,0.6);
+      letter-spacing:4px; margin-top:8px;
+    }
+    .collected-sub { display:block; font-size:16px; color:rgba(255,255,255,0.8); margin-top:8px; }
+
+    #reset-btn {
+      display:none; position:fixed; top:24px; right:20px; z-index:40;
+      background:rgba(0,0,0,0.6); color:#fff;
+      border:1.5px solid rgba(255,255,255,0.4);
+      border-radius:24px; padding:8px 18px; font-size:14px; cursor:pointer;
     }
     #qr-canvas { display:none; }
   </style>
@@ -26,18 +81,54 @@
 <body>
   <video id="video" autoplay muted playsinline></video>
   <canvas id="qr-canvas"></canvas>
-  <div id="debug">Запуск...</div>
-  <div id="scan-hint">Наведи камеру на QR-код</div>
+
+  <div id="scan-overlay">
+    <div class="scan-frame"><div class="scan-line"></div></div>
+    <p class="scan-hint">Наведи камеру на QR-код</p>
+  </div>
+
+  <div id="ar-screen">
+    <model-viewer
+      id="viewer"
+      src="character.glb"
+      alt="ARQuest character"
+      ar
+      ar-modes="webxr scene-viewer quick-look"
+      camera-controls
+      auto-rotate
+      shadow-intensity="1"
+      environment-image="neutral"
+      autoplay
+    ></model-viewer>
+  </div>
+
+  <div id="ar-ui">
+    <div id="tap-hint">Торкнись екрану</div>
+  </div>
+
+  <div id="collected-msg">
+    <div class="collected-inner">
+      <span class="collected-icon">✦</span>
+      <span class="collected-text">COLLECTED!</span>
+      <span class="collected-sub">Персонажа знайдено</span>
+    </div>
+  </div>
+
+  <button id="reset-btn" onclick="resetApp()">↩ Знову</button>
 
   <script>
-    const video  = document.getElementById('video');
-    const canvas = document.getElementById('qr-canvas');
-    const ctx    = canvas.getContext('2d');
-    const dbg    = document.getElementById('debug');
-    let attempts = 0;
-    let scanStarted = false;
+    const scanOverlay  = document.getElementById('scan-overlay');
+    const arScreen     = document.getElementById('ar-screen');
+    const arUi         = document.getElementById('ar-ui');
+    const tapHint      = document.getElementById('tap-hint');
+    const collectedMsg = document.getElementById('collected-msg');
+    const resetBtn     = document.getElementById('reset-btn');
+    const video        = document.getElementById('video');
+    const canvas       = document.getElementById('qr-canvas');
+    const ctx          = canvas.getContext('2d');
+    const viewer       = document.getElementById('viewer');
 
-    function log(msg) { dbg.innerHTML = msg; }
+    let scanning = true, collected = false;
 
     async function startCamera() {
       try {
@@ -46,44 +137,77 @@
         });
         video.srcObject = stream;
         await video.play();
-        log('✅ jsQR загружен<br>✅ Камера запущена<br>⏳ Запускаємо сканування...');
-
-        // Запускаем сразу через таймер — не ждём loadeddata
+        // Фикс: не ждём loadeddata, запускаем через таймер
         setTimeout(() => {
-          log('✅ jsQR загружен<br>✅ Камера запущена<br>✅ Сканування активне<br>🔍 Шукаємо QR...');
           setInterval(tryDecode, 400);
-          scanStarted = true;
         }, 1500);
-
       } catch(e) {
-        log('❌ Помилка камери: ' + e.message);
+        alert('Немає доступу до камери. Відкрий у Chrome і дозволь камеру.');
       }
     }
 
     function tryDecode() {
-      // Если видео ещё не дало размер — пропускаем
-      if (video.videoWidth === 0) {
-        attempts++;
-        log('✅ Камера запущена<br>⏳ Відео ще не готове (спроба ' + attempts + ')');
-        return;
-      }
-
+      if (!scanning || video.videoWidth === 0) return;
       canvas.width  = video.videoWidth;
       canvas.height = video.videoHeight;
       ctx.drawImage(video, 0, 0);
-
       const img  = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const code = jsQR(img.data, img.width, img.height, {
-        inversionAttempts: 'attemptBoth'
-      });
-
-      attempts++;
+      const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'attemptBoth' });
       if (code) {
-        log('🎉 QR знайдено!<br>Текст: ' + code.data);
-      } else {
-        log('✅ Камера: ' + canvas.width + 'x' + canvas.height
-          + '<br>🔍 Спроба #' + attempts + ' — QR не знайдено<br>Наведи камеру на QR...');
+        scanning = false;
+        showCharacter();
       }
+    }
+
+    function showCharacter() {
+      video.srcObject.getTracks().forEach(t => t.stop());
+      scanOverlay.style.display = 'none';
+      arScreen.style.display    = 'block';
+      arUi.style.display        = 'flex';
+      resetBtn.style.display    = 'block';
+
+      viewer.addEventListener('load', () => {
+        const anims = viewer.availableAnimations;
+        if (anims && anims.length > 0) {
+          viewer.animationName = anims[0];
+          viewer.play({ repetitions: Infinity });
+        }
+      }, { once: true });
+    }
+
+    document.addEventListener('click', handleTap);
+    document.addEventListener('touchstart', handleTap, { passive: true });
+
+    function handleTap(e) {
+      if (e.target === resetBtn) return;
+      if (arScreen.style.display !== 'block') return;
+      if (collected) return;
+      collected = true;
+
+      const anims = viewer.availableAnimations;
+      if (anims && anims.length > 1) {
+        viewer.animationName = anims[1];
+        viewer.play({ repetitions: 1 });
+        viewer.addEventListener('finished', () => {
+          viewer.animationName = anims[0];
+          viewer.play({ repetitions: Infinity });
+        }, { once: true });
+      }
+
+      tapHint.style.display = 'none';
+      collectedMsg.classList.add('show');
+      setTimeout(() => collectedMsg.classList.remove('show'), 3000);
+    }
+
+    function resetApp() {
+      collected = false; scanning = true;
+      scanOverlay.style.display = 'flex';
+      arScreen.style.display    = 'none';
+      arUi.style.display        = 'none';
+      resetBtn.style.display    = 'none';
+      tapHint.style.display     = 'block';
+      collectedMsg.classList.remove('show');
+      startCamera();
     }
 
     startCamera();
